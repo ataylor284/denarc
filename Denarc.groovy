@@ -1,10 +1,19 @@
 #!/usr/bin/env groovy
 
+import groovy.transform.Immutable
+
 @Grab(group='org.ccil.cowan.tagsoup', module='tagsoup', version='1.2')
 
+@Immutable
 class FixRecipe {
-	def rules   // list of CodeNarc violations this recipe can fix
-	def action  // closure to fix a line with a violation
+	List rules   // list of CodeNarc violations this recipe can fix
+	Closure action  // closure to fix a line with a violation
+}
+
+@Immutable
+class Violation {
+	String ruleName
+	String sourceCode
 }
 
 def recipes = [
@@ -19,7 +28,7 @@ def recipes = [
 def doc = new XmlSlurper(new org.ccil.cowan.tagsoup.Parser()).parse(System.in)
 def currentPackage
 
-doc.body.div.findAll { it.@class == 'summary' }.each { summaryDiv ->
+for (summaryDiv in doc.body.div.findAll { it.@class == 'summary' }) {
 
 	// somewhat hacky way of recreating the groovy filename from packageHeader and fileHeader tag contents
 	def packageHeader = summaryDiv.h2.find { it.@class == 'packageHeader' }
@@ -34,16 +43,20 @@ doc.body.div.findAll { it.@class == 'summary' }.each { summaryDiv ->
 		filename = "$currentPackage/${m[0][1]}".replaceAll('\\.', "/").replaceAll('/groovy$', ".groovy")
 	}
 
+	if (!summaryDiv.h3.find { it.@class == 'fileHeader' } )
+		continue;
+
 	// collect all the CodeNarc violations for this file into a list of [recipe, violations] pairs
 	def fixes = recipes.collect { recipe ->
 		[recipe, summaryDiv.table.tr.collect { row ->
 			if (row.td.a.find { recipe.rules.contains(it.@href) }) {
-				row.td.p.span.findAll { it.@class == 'sourceCode' }.collect { String.format("%.56s", it.text()) }
+				def violation = new Violation(row.td[0].a.@href.text(), String.format("%.56s", row.td[3].p.span[1].text()))
+				[violation]
 			}
 		}.inject([], { list, value -> if (value) { list + value } else { list } })]
 	}.findAll { recipe, violations -> 
 		// filter out recipes without any violations
-		violations 
+		violations
 	}
 
 	// if some fixable violations were found, rewrite the file with recipe actions applied
@@ -53,7 +66,7 @@ doc.body.div.findAll { it.@class == 'summary' }.each { summaryDiv ->
 		new File(filename + '.new').withPrintWriter { replacement ->
 			orig.eachLine { line ->
 				for (fix in fixes) {
-					if (line && fix[1].contains(String.format("%.56s", line.trim()))) {
+					if (line && fix[1].sourceCode.contains(String.format("%.56s", line.trim()))) {
 						line = fix[0].action(line)
 					}
 				}
