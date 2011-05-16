@@ -4,16 +4,14 @@ import groovy.transform.Immutable
 
 @Grab(group='org.ccil.cowan.tagsoup', module='tagsoup', version='1.2')
 
-@Immutable
-class FixRecipe {
-	List rules   // list of CodeNarc violations this recipe can fix
-	Closure action  // closure to fix a line with a violation
-}
-
-@Immutable
-class Violation {
+@Immutable class Violation {
 	String ruleName
 	String sourceCode
+}
+
+@Immutable class FixRecipe {
+	List rules   // list of CodeNarc violations this recipe can fix
+	Closure action  // closure to fix a line with a violation
 }
 
 def recipes = [
@@ -46,17 +44,14 @@ for (summaryDiv in doc.body.div.findAll { it.@class == 'summary' }) {
 	if (!summaryDiv.h3.find { it.@class == 'fileHeader' } )
 		continue;
 
-	// collect all the CodeNarc violations for this file into a list of [recipe, violations] pairs
-	def fixes = recipes.collect { recipe ->
-		[recipe, summaryDiv.table.tr.collect { row ->
-			if (row.td.a.find { recipe.rules.contains(it.@href) }) {
-				def violation = new Violation(row.td[0].a.@href.text(), String.format("%.56s", row.td[3].p.span[1].text()))
-				[violation]
-			}
-		}.inject([], { list, value -> if (value) { list + value } else { list } })]
-	}.findAll { recipe, violations -> 
-		// filter out recipes without any violations
-		violations
+	// collect all the CodeNarc violations for this file into a list of [recipe, violation] pairs
+	def fixes = summaryDiv.table.tr.collect { row ->
+		def violation = new Violation(row.td[0].a.@href.text(), String.format("%.56s", row.td[3].p.span[1].text()))
+		def recipe = recipes.find { rule -> rule.rules.contains(violation.ruleName) }
+		[recipe, violation]
+	}.findAll { recipe, violation -> 
+		// filter out violations without any matching recipes
+		recipe && violation
 	}
 
 	// if some fixable violations were found, rewrite the file with recipe actions applied
@@ -65,9 +60,11 @@ for (summaryDiv in doc.body.div.findAll { it.@class == 'summary' }) {
 		def orig = new File(filename)
 		new File(filename + '.new').withPrintWriter { replacement ->
 			orig.eachLine { line ->
-				for (fix in fixes) {
-					if (line && fix[1].sourceCode.contains(String.format("%.56s", line.trim()))) {
-						line = fix[0].action(line)
+				fixes.each { recipe, violation ->
+					if (line && line.trim().contains(String.format("%.56s", violation.sourceCode.trim()))) {
+						println "replacing $line with"
+						line = recipe.action(line)
+						println " $line ($recipe, $violation)"
 					}
 				}
 				if (line != null) {
